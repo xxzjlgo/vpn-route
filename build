@@ -1,0 +1,91 @@
+#!/usr/bin/env python
+
+import argparse
+import math
+import os
+import re
+import subprocess
+import sys
+import urllib2
+
+
+def generate_mac(_):
+    results = fetch_ip_data()
+
+    upscript_header = """\
+#!/bin/sh
+export PATH="/bin:/sbin:/usr/sbin:/usr/bin"
+
+OLDGW=`netstat -nr | grep 'ppp0$' | grep 'UH' | sed 's/\([0-9\.]*\) .*/\1/'`
+
+if [ ! -e /tmp/pptp_oldgw ]; then
+    echo "${OLDGW}" > /tmp/pptp_oldgw
+fi
+
+dscacheutil -flushcache
+"""
+
+    downscript_header = """\
+#!/bin/sh
+export PATH="/bin:/sbin:/usr/sbin:/usr/bin"
+
+if [ ! -e /tmp/pptp_oldgw ]; then
+        exit 0
+fi
+
+OLDGW=`cat /tmp/pptp_oldgw`
+"""
+
+    upfile = open('ip-up','w')
+    downfile = open('ip-down','w')
+
+    upfile.write(upscript_header)
+    downfile.write(downscript_header)
+
+    for ip, mask in results:
+        upfile.write('route add %s/%s "${OLDGW}"\n' % (ip, mask))
+        downfile.write('route delete %s/%s ${OLDGW}\n' % (ip, mask))
+
+    downfile.write('\n\nrm /tmp/pptp_oldgw\n')
+
+    upfile.close()
+    downfile.close()
+
+    os.chmod('ip-up', 00755)
+    os.chmod('ip-down', 00755)
+
+
+def fetch_ip_data():
+    url = 'https://raw.githubusercontent.com/xxzjlgo/vpn-route/master/iptables'
+    try:
+        data = subprocess.check_output(['wget', url, '-O-'])
+    except (OSError, AttributeError):
+        print >> sys.stderr, "Fetching data from apnic.net, "\
+                             "it might take a few minutes, please wait..."
+        data = urllib2.urlopen(url).read()
+
+    cnregex = re.compile(r'^[\d\.]+\|\d+$',
+                         re.I | re.M)
+    cndata = cnregex.findall(data)
+
+    results = []
+
+    for item in cndata:
+        unit_items = item.split('|')
+        ip = unit_items[0]
+        mask = unit_items[1]
+
+        results.append((ip, mask))
+    return results
+
+def main():
+    parser = argparse.ArgumentParser(
+                 description="Generate routing rules for VPN .")
+
+    args = parser.parse_args()
+
+    
+    generate_mac(args)
+
+if __name__ == '__main__':
+    main()
